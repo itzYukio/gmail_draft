@@ -8,6 +8,84 @@ A local-only Python/Flask web app that uses the official Gmail API to create **u
 
 # 1. How the app works
 
+This build supports **two usage modes** without changing the code.
+
+### Mode A — Run directly on your iPhone with iSH
+
+If Python, Flask, and the application are running inside iSH on the same iPhone you are using to open the browser:
+
+```text
+iPhone
+ ├── Python app
+ ├── Web UI       127.0.0.1:<auto port>
+ └── OAuth        127.0.0.1:<auto port>
+```
+
+There is **no Termius forwarding**.
+
+When the program asks:
+
+```text
+Web UI port [auto]:
+OAuth callback port [auto]:
+```
+
+simply press **Enter twice**.
+
+The app automatically finds two free localhost ports.
+
+It will then print something like:
+
+```text
+Web UI:          http://127.0.0.1:49152
+OAuth callback:  http://127.0.0.1:49153/oauth2callback
+
+If this app is running directly on your iPhone/iSH:
+  Open: http://127.0.0.1:49152
+  No Termius port forwarding is required.
+```
+
+Open the Web UI address in Safari/your browser on the same iPhone.
+
+The Google authorization redirect will also return directly to the iSH application's localhost callback.
+
+### Mode B — Run on your VPS through Termius
+
+If Python is running on your VPS, you can enter fixed ports:
+
+```text
+Web UI port [auto]: 8080
+OAuth callback port [auto]: 8765
+```
+
+Then forward both ports through Termius:
+
+```text
+Local 8080 -> VPS 127.0.0.1:8080
+Local 8765 -> VPS 127.0.0.1:8765
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8080
+```
+
+on your iPhone.
+
+### Important clarification about "localhost"
+
+`127.0.0.1` always means **the device where the application is running**.
+
+Therefore:
+
+- App running in iSH on iPhone → `127.0.0.1` is your iPhone.
+- App running on VPS → `127.0.0.1` is the VPS.
+
+When using the VPS, Termius forwarding makes the VPS's loopback service accessible as a local port on your iPhone.
+
+
+
 The app uses two localhost ports on the VPS:
 
 ```text
@@ -737,6 +815,217 @@ Create drafts
 ```
 
 Done.
+
+---
+
+
+
+## iSH-specific note
+
+If you run the application directly inside iSH, **do not create any Termius tunnel**.
+
+Use:
+
+```bash
+python3 app.py
+```
+
+Press Enter for:
+
+```text
+Web UI port [auto]:
+OAuth callback port [auto]:
+```
+
+Then open the printed Web UI URL, for example:
+
+```text
+http://127.0.0.1:49152
+```
+
+The OAuth callback port is handled by the same iSH process, so Google can return to it directly.
+
+If Safari cannot reach the displayed localhost URL, first verify that the Python process is still running and that iSH is listening on the printed port. Do not replace `127.0.0.1` with the VPS IP address.
+
+---
+
+
+# 23. Important: OAuth "(invalid_grant) Missing code verifier" error
+
+If Google authorization succeeds but the callback page says:
+
+```text
+Authorization failed.
+
+(invalid_grant) Missing code verifier.
+```
+
+this was an OAuth implementation issue in an earlier build.
+
+Google's installed-app OAuth flow uses PKCE. The authorization request has a `code_verifier`, and the same verifier must be supplied when the authorization code is exchanged for tokens. `google-auth-oauthlib` stores that verifier on the `Flow` object and uses it during `fetch_token()`. citeturn0search0turn0search2
+
+The fixed build keeps the **same Flow object** from:
+
+```text
+Generate authorization URL
+        ↓
+Google login
+        ↓
+127.0.0.1 OAuth callback
+        ↓
+fetch_token()
+```
+
+So you do not need to change anything in Google Cloud.
+
+### What to do
+
+Stop the previous version:
+
+```text
+Ctrl+C
+```
+
+Replace your old `app.py` with the one from this build.
+
+Then start again:
+
+```bash
+source .venv/bin/activate
+python3 app.py
+```
+
+If the previous authorization attempt failed, you can optionally remove:
+
+```bash
+rm -f token.json
+```
+
+Then generate a **new** authorization link from the web UI.
+
+Do not reuse an old Google authorization tab/link from a previous run. A PKCE authorization request is tied to the flow that generated it.
+
+---
+
+# 23. Important: OAuth "insecure_transport" error
+
+If Google authorization succeeds but the final page says:
+
+```text
+Authorization failed.
+
+(insecure_transport) OAuth 2 MUST utilize https.
+```
+
+**Do not change your Termius forwarding to HTTPS.**
+
+This happens because OAuthLib normally rejects an HTTP OAuth callback, even when the callback is a local loopback address such as:
+
+```text
+http://127.0.0.1:8765/oauth2callback
+```
+
+Google's Desktop-app OAuth flow supports the loopback redirect mechanism on `localhost` / `127.0.0.1`, and localhost redirect URIs are exempt from the normal HTTPS redirect-URI requirement. citeturn0search9turn0search2
+
+The updated `app.py` already contains:
+
+```python
+os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
+```
+
+You **do not need to manually add this setting**.
+
+It is appropriate here because:
+
+- the Google OAuth client is a **Desktop app**;
+- the callback server binds only to `127.0.0.1`;
+- the VPS does not expose the callback port publicly;
+- Termius carries the local loopback port through your SSH tunnel.
+
+OAuthLib documents this variable as a way to permit HTTP for local testing and warns against using it for public/production OAuth endpoints. citeturn0search1
+
+## What you need to do
+
+Stop the old application:
+
+```text
+Ctrl+C
+```
+
+Replace your old `app.py` with the `app.py` from this updated build.
+
+You can keep:
+
+```text
+credentials.json
+token.json
+```
+
+If `token.json` does not exist because authorization failed, that's completely fine.
+
+Start again:
+
+```bash
+source .venv/bin/activate
+python3 app.py
+```
+
+Choose your ports:
+
+```text
+Web UI port [8080]: 8080
+OAuth callback port [8765]: 8765
+```
+
+In Termius, forward:
+
+```text
+Local 8080 -> VPS 127.0.0.1:8080
+Local 8765 -> VPS 127.0.0.1:8765
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8080
+```
+
+and run the Google authorization again.
+
+### Do NOT do these things
+
+You do **not** need to:
+
+- create an SSL certificate for `127.0.0.1`;
+- expose the OAuth port in Oracle Cloud;
+- add the OAuth port to your VCN security rules;
+- use `https://127.0.0.1`;
+- create an iOS OAuth client;
+- create a Web application OAuth client for this flow.
+
+Your Google OAuth client should be:
+
+```text
+Application type: Desktop app
+```
+
+Google states that the loopback IP redirect flow remains supported for Desktop-app OAuth clients. citeturn0search2
+
+## If you want to restart Google authorization completely
+
+Delete the saved token:
+
+```bash
+rm -f token.json
+```
+
+Then restart:
+
+```bash
+python3 app.py
+```
+
+You normally do **not** need to create a new Google Cloud project or OAuth client because of this `insecure_transport` error.
 
 ---
 
