@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gmail Bulk Draft Builder</title>
+<style>
+:root{color-scheme:dark;--bg:#0b0d10;--panel:#14181d;--panel2:#1b2128;--border:#2b333d;--text:#edf2f7;--muted:#9aa7b5;--accent:#8ab4f8;--danger:#ff8a80;--ok:#81c995}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif}
+.wrap{max-width:780px;margin:auto;padding:28px 18px 60px}h1{margin:0 0 8px;font-size:28px}.sub{color:var(--muted);margin-bottom:24px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:20px;margin:14px 0}
+.label{display:block;font-size:13px;color:var(--muted);margin-bottom:7px}input{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:12px 13px;font-size:15px;outline:0}
+input:focus{border-color:var(--accent)}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.row{margin-bottom:16px}
+button,.authlink{border:0;border-radius:10px;padding:12px 16px;font-size:14px;font-weight:650;cursor:pointer;background:var(--accent);color:#081018;text-decoration:none;display:inline-block}
+button.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--border)}button.danger{background:#3a1d20;color:var(--danger);border:1px solid #653137}
+button:disabled{opacity:.45;cursor:not-allowed}.account{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.pill{padding:7px 10px;border-radius:999px;background:#1d3a27;color:var(--ok);font-size:12px}.muted{color:var(--muted);font-size:13px}
+.notice{background:#201f17;border:1px solid #4a462c;padding:12px;border-radius:10px;margin-top:12px}.error{background:#311b1e;border:1px solid #673239;padding:12px;border-radius:10px;color:#ffb4ab;margin-top:12px;white-space:pre-wrap}
+.progress{height:10px;background:#252c34;border-radius:999px;overflow:hidden;margin:12px 0}.bar{height:100%;width:0%;background:var(--accent);transition:width .2s}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.stat{background:var(--panel2);border-radius:10px;padding:12px}.stat b{display:block;font-size:20px}
+@media(max-width:600px){.grid2,.stats{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Gmail Bulk Draft Builder</h1>
+<div class="sub">Create multiple unsent Gmail drafts through the Gmail API.</div>
+
+<div class="card">
+<div class="account"><div><div class="label">Authorized sender account</div><strong id="account">{{ state.email or "Not authorized" }}</strong></div><span id="pill" class="pill" style="display:none">Authorized</span></div>
+<div id="authBox" style="margin-top:16px"><div class="muted">Authorize the Gmail account whose Drafts folder you want to use.</div><div id="authLinkWrap" style="margin-top:12px"></div><div id="authError"></div></div>
+</div>
+
+<div class="card">
+<div class="row"><label class="label">Recipient address</label><input id="recipient" type="email" placeholder="recipient@example.com"></div>
+<div class="row"><label class="label">Subject number range</label><div class="grid2"><input id="first" inputmode="numeric" maxlength="17" placeholder="First number, e.g. 1000"><input id="last" inputmode="numeric" maxlength="17" placeholder="Last number, e.g. 2000"></div><div class="muted" style="margin-top:7px">4–17 digits. A random integer from the inclusive range is selected independently for every draft.</div></div>
+<div class="row"><label class="label">Number of drafts to create</label><input id="count" type="number" min="1" max="500" placeholder="e.g. 50"></div>
+<div class="row"><label class="label">Delay between drafts (seconds)</label><input id="delay" type="number" min="0" max="60" step="0.05" value="0.25"></div>
+<div style="display:flex;gap:10px;flex-wrap:wrap"><button id="start" onclick="startJob()">Create drafts</button><button class="danger" id="stop" onclick="stopJob()" disabled>Stop</button></div>
+<div id="formError"></div>
+</div>
+
+<div class="card">
+<div class="stats"><div class="stat"><span class="muted">Requested</span><b id="requested">0</b></div><div class="stat"><span class="muted">Created</span><b id="created">0</b></div><div class="stat"><span class="muted">Failed</span><b id="failed">0</b></div></div>
+<div class="progress"><div class="bar" id="bar"></div></div><div class="muted" id="statusText">Idle</div><div class="muted" id="subjectText" style="margin-top:5px"></div><div id="jobError"></div>
+</div>
+</div>
+<script>
+function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
+async function refresh(){
+ const s=await (await fetch("/api/status")).json(), j=s.job;
+ document.getElementById("account").textContent=s.email||"Not authorized";
+ document.getElementById("pill").style.display=s.authenticated?"inline-block":"none";
+ const wrap=document.getElementById("authLinkWrap");
+ if(s.authenticated) wrap.innerHTML='<div class="notice">Authorization is active. Sender address is locked to this Google account.</div>';
+ else if(s.auth_url) wrap.innerHTML='<a class="authlink" href="'+esc(s.auth_url)+'" target="_blank" rel="noopener">Open Google authorization</a>';
+ else wrap.innerHTML='<button class="secondary" onclick="startAuth()">Generate authorization link</button>';
+ document.getElementById("authError").innerHTML=s.auth_error?'<div class="error">'+esc(s.auth_error)+'</div>':"";
+ document.getElementById("requested").textContent=j.requested||0;document.getElementById("created").textContent=j.created||0;document.getElementById("failed").textContent=j.failed||0;
+ const total=j.requested||0,pct=total?Math.min(100,((j.created+j.failed)/total)*100):0;document.getElementById("bar").style.width=pct+"%";
+ document.getElementById("subjectText").textContent=j.current_subject?"Latest subject number: "+j.current_subject:"";
+ document.getElementById("start").disabled=!s.authenticated||j.running;document.getElementById("stop").disabled=!j.running;
+ document.getElementById("statusText").textContent=j.running?"Creating drafts…":(j.done?(j.stop_requested?"Stopped.":"Finished."):"Idle");
+ document.getElementById("jobError").innerHTML=j.error?'<div class="error">'+esc(j.error)+'</div>':"";
+}
+async function startAuth(){await fetch("/api/start-auth",{method:"POST"});setTimeout(refresh,300)}
+async function startJob(){
+ document.getElementById("formError").innerHTML="";
+ const payload={recipient:recipient.value.trim(),first:first.value.trim(),last:last.value.trim(),count:count.value.trim(),delay:delay.value.trim()};
+ const d=await (await fetch("/api/create-drafts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})).json();
+ if(!d.ok)document.getElementById("formError").innerHTML='<div class="error">'+esc(d.error)+'</div>';refresh();
+}
+async function stopJob(){await fetch("/api/stop",{method:"POST"});refresh()}
+refresh();setInterval(refresh,1000);
+</script>
+</body>
+</html>
